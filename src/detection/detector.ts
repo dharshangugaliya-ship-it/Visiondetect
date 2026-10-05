@@ -8,6 +8,43 @@ import '@tensorflow/tfjs';
 import { Detection, PerformanceMetrics, SearchResultSummary } from './types';
 import { extractObjectThumbnail, getClassColor } from './visualization';
 
+export function calculateIoU(
+  boxA: [number, number, number, number],
+  boxB: [number, number, number, number]
+): number {
+  const xA = Math.max(boxA[0], boxB[0]);
+  const yA = Math.max(boxA[1], boxB[1]);
+  const xB = Math.min(boxA[2], boxB[2]);
+  const yB = Math.min(boxA[3], boxB[3]);
+  const interArea = Math.max(0, xB - xA) * Math.max(0, yB - yA);
+  const boxAArea = Math.max(0, boxA[2] - boxA[0]) * Math.max(0, boxA[3] - boxA[1]);
+  const boxBArea = Math.max(0, boxB[2] - boxB[0]) * Math.max(0, boxB[3] - boxB[1]);
+  const unionArea = boxAArea + boxBArea - interArea;
+  return unionArea > 0 ? interArea / unionArea : 0;
+}
+
+export function applyNMS(detections: Detection[], iouThreshold: number = 0.45): Detection[] {
+  const sorted = [...detections].sort((a, b) => b.confidence - a.confidence);
+  const selected: Detection[] = [];
+
+  for (const det of sorted) {
+    let keep = true;
+    for (const existing of selected) {
+      if (existing.class_name.toLowerCase() === det.class_name.toLowerCase()) {
+        const iou = calculateIoU(existing.bounding_box, det.bounding_box);
+        if (iou > iouThreshold) {
+          keep = false;
+          break;
+        }
+      }
+    }
+    if (keep) {
+      selected.push(det);
+    }
+  }
+  return selected;
+}
+
 export class YOLOv8Detector {
   private model: cocoSsd.ObjectDetection | null = null;
   private isLoading: boolean = false;
@@ -60,11 +97,11 @@ export class YOLOv8Detector {
   }
 
   /**
-   * Helper to convert an image/video/canvas into a base64 data URL
+   * Helper to convert an image/video/canvas into a high-res base64 data URL
    */
   private mediaToBase64(
     media: HTMLImageElement | HTMLVideoElement | HTMLCanvasElement,
-    maxWidth = 1280
+    maxWidth = 1920
   ): string {
     const canvas = document.createElement('canvas');
     let w = 'naturalWidth' in media ? media.naturalWidth : media.width;
@@ -87,18 +124,124 @@ export class YOLOv8Detector {
     if (!ctx) return '';
 
     ctx.drawImage(media, 0, 0, w, h);
-    return canvas.toDataURL('image/jpeg', 0.85);
+    return canvas.toDataURL('image/jpeg', 0.90);
+  }
+
+  /**
+   * Multi-Scale / Tiled High-Resolution Inference (SAHI)
+   * Slices the media into overlapping high-resolution tiles to capture minute objects
+   */
+  public async detectMultiScaleTiled(
+    media: HTMLImageElement | HTMLVideoElement | HTMLCanvasElement,
+    naturalWidth: number,
+    naturalHeight: number
+  ): Promise<Detection[]> {
+    if (!this.model || !this.isLoaded) return [];
+
+    const totalArea = Math.max(1, naturalWidth * naturalHeight);
+    const allDetections: Detection[] = [];
+
+    // 1. Full Image Inference
+    try {
+      const fullPredictions = await this.model.detect(media, 20, 0.08);
+      for (let idx = 0; idx < fullPredictions.length; idx++) {
+        const pred = fullPredictions[idx];
+        const [bx, by, bw, bh] = pred.bbox;
+        const x1 = Math.round(Math.max(0, bx));
+        const y1 = Math.round(Math.max(0, by));
+        const x2 = Math.round(Math.min(naturalWidth, bx + bw));
+        const y2 = Math.round(Math.min(naturalHeight, by + bh));
+        const bbox: [number, number, number, number] = [x1, y1, x2, y2];
+        const area = (x2 - x1) * (y2 - y1);
+        const areaPercentage = Number(((area / totalArea) * 100).toFixed(2));
+        const isMinuteObject = areaPercentage <= 3.5;
+
+        allDetections.push({
+          id: `full-${idx}-${Date.now()}`,
+          class_id: idx,
+          class_name: pred.class,
+          confidence: Number(pred.score.toFixed(2)),
+          bounding_box: bbox,
+          color: getClassColor(pred.class),
+          thumbnailUrl: extractObjectThumbnail(media, bbox, 88),
+          isMinuteObject,
+          areaPercentage,
+        });
+      }
+    } catch (e) {
+      console.warn('Full inference skip:', e);
+    }
+
+    // 2. High-Resolution Tiled Inference (2x2 with 20% overlap = 4 tiles)
+    const tileW = Math.round(naturalWidth * 0.6);
+    const tileH = Math.round(naturalHeight * 0.6);
+    const tileCoords = [
+      { x: 0, y: 0 },
+      { x: Math.round(naturalWidth * 0.4), y: 0 },
+      { x: 0, y: Math.round(naturalHeight * 0.4) },
+      { x: Math.round(naturalWidth * 0.4), y: Math.round(naturalHeight * 0.4) },
+    ];
+
+    const tileCanvas = document.createElement('canvas');
+    tileCanvas.width = tileW;
+    tileCanvas.height = tileH;
+    const tileCtx = tileCanvas.getContext('2d');
+
+    if (tileCtx) {
+      for (let t = 0; t < tileCoords.length; t++) {
+        const { x: tx, y: ty } = tileCoords[t];
+        tileCtx.clearRect(0, 0, tileW, tileH);
+        tileCtx.drawImage(media, tx, ty, tileW, tileH, 0, 0, tileW, tileH);
+
+        try {
+          const tilePredictions = await this.model.detect(tileCanvas, 15, 0.08);
+          for (let p = 0; p < tilePredictions.length; p++) {
+            const pred = tilePredictions[p];
+            const [bx, by, bw, bh] = pred.bbox;
+
+            // Map local tile coordinates to global frame
+            const gx1 = Math.round(Math.max(0, tx + bx));
+            const gy1 = Math.round(Math.max(0, ty + by));
+            const gx2 = Math.round(Math.min(naturalWidth, tx + bx + bw));
+            const gy2 = Math.round(Math.min(naturalHeight, ty + by + bh));
+            const bbox: [number, number, number, number] = [gx1, gy1, gx2, gy2];
+            const area = (gx2 - gx1) * (gy2 - gy1);
+            const areaPercentage = Number(((area / totalArea) * 100).toFixed(2));
+            const isMinuteObject = areaPercentage <= 3.5;
+
+            allDetections.push({
+              id: `tile-${t}-${p}-${Date.now()}`,
+              class_id: p,
+              class_name: pred.class,
+              confidence: Number(pred.score.toFixed(2)),
+              bounding_box: bbox,
+              color: getClassColor(pred.class),
+              thumbnailUrl: extractObjectThumbnail(media, bbox, 88),
+              isMinuteObject,
+              areaPercentage,
+            });
+          }
+        } catch (e) {
+          // continue next tile
+        }
+      }
+    }
+
+    // Merge duplicate detections across tiles using Non-Maximum Suppression (NMS)
+    return applyNMS(allDetections, 0.45);
   }
 
   /**
    * Run Open-Vocabulary Detection for any target concept entered by the user
+   * with high-resolution and multi-scale minute object detection.
    */
   public async detectOpenVocabulary(
     media: HTMLImageElement | HTMLVideoElement | HTMLCanvasElement,
     naturalWidth: number,
     naturalHeight: number,
     target: string,
-    threshold: number = 0.25
+    threshold: number = 0.25,
+    enableMultiScale: boolean = true
   ): Promise<{
     detections: Detection[];
     metrics: PerformanceMetrics;
@@ -133,6 +276,7 @@ export class YOLOv8Detector {
           image: base64Image,
           target: cleanTarget,
           threshold,
+          enableMultiScale,
         }),
       });
 
@@ -140,14 +284,18 @@ export class YOLOv8Detector {
         const data = await res.json();
 
         if (data.success && Array.isArray(data.detections)) {
-          const detections: Detection[] = data.detections.map((d: any, idx: number) => {
-            // box_2d is [ymin, xmin, ymax, xmax] in 0-1000
-            const [ymin, xmin, ymax, xmax] = d.box_2d || [0, 0, 0, 0];
+          const totalArea = Math.max(1, naturalWidth * naturalHeight);
+          const rawDetections: Detection[] = data.detections.map((d: any, idx: number) => {
+            const [ymin = 0, xmin = 0, ymax = 0, xmax = 0] = d.box_2d || [0, 0, 0, 0];
             const x1 = Math.round((xmin / 1000) * naturalWidth);
             const y1 = Math.round((ymin / 1000) * naturalHeight);
             const x2 = Math.round((xmax / 1000) * naturalWidth);
             const y2 = Math.round((ymax / 1000) * naturalHeight);
             const bbox: [number, number, number, number] = [x1, y1, x2, y2];
+
+            const area = Math.max(0, x2 - x1) * Math.max(0, y2 - y1);
+            const areaPercentage = Number(((area / totalArea) * 100).toFixed(2));
+            const isMinute = d.isMinuteObject ?? (areaPercentage <= 3.5);
 
             const thumb = extractObjectThumbnail(media, bbox, 88);
 
@@ -161,8 +309,13 @@ export class YOLOv8Detector {
               thumbnailUrl: thumb,
               description: d.description,
               isTargetMatch: true,
+              isMinuteObject: isMinute,
+              areaPercentage,
             };
           });
+
+          // Apply NMS to clean overlapping hits
+          const detections = applyNMS(rawDetections, 0.45);
 
           const latencyMs = data.latencyMs || Math.round(performance.now() - startTime);
           const topConfidence = detections.length > 0
@@ -186,39 +339,39 @@ export class YOLOv8Detector {
         }
       }
     } catch (err) {
-      console.warn('Server open-vocabulary detection call error, using local matcher:', err);
+      console.warn('Server open-vocabulary detection call note:', err);
     }
 
-    // 2. Intelligent local fallback: match user target against localized objects
-    const localRes = await this.detectAll(media, naturalWidth, naturalHeight);
+    // 2. Local fallback with Multi-Scale Tiling (SAHI)
+    const multiScaleDetections = enableMultiScale
+      ? await this.detectMultiScaleTiled(media, naturalWidth, naturalHeight)
+      : (await this.detectAll(media, naturalWidth, naturalHeight)).detections;
+
     const targetLower = cleanTarget.toLowerCase();
 
-    // Map common user search synonyms (e.g. 'fire extinguisher', 'car', 'automobile', 'person', 'helmet', etc.)
-    const matches = localRes.detections.filter((d) => {
+    const matches = multiScaleDetections.filter((d) => {
       const cls = d.class_name.toLowerCase();
       if (cls === targetLower || cls.includes(targetLower) || targetLower.includes(cls)) {
         return true;
       }
-      // Common vehicle synonyms
       if ((targetLower.includes('car') || targetLower.includes('auto') || targetLower.includes('vehicle')) && (cls === 'car' || cls === 'bus' || cls === 'truck')) {
         return true;
       }
-      // Common person / human synonyms
       if ((targetLower.includes('human') || targetLower.includes('pedestrian') || targetLower.includes('man') || targetLower.includes('woman')) && cls === 'person') {
         return true;
       }
-      // Common bag / backpack
       if ((targetLower.includes('backpack') || targetLower.includes('bag') || targetLower.includes('luggage')) && (cls === 'backpack' || cls === 'handbag' || cls === 'suitcase')) {
         return true;
       }
-      // Cycle synonyms
       if ((targetLower.includes('bike') || targetLower.includes('bicycle') || targetLower.includes('cycle')) && (cls === 'bicycle' || cls === 'motorcycle')) {
+        return true;
+      }
+      if ((targetLower.includes('phone') || targetLower.includes('mobile') || targetLower.includes('device')) && cls === 'cell_phone') {
         return true;
       }
       return false;
     });
 
-    // Mark matched detections
     const targetDetections = matches.map((d) => ({
       ...d,
       isTargetMatch: true,
@@ -232,8 +385,9 @@ export class YOLOv8Detector {
     return {
       detections: targetDetections,
       metrics: {
-        ...localRes.metrics,
+        fps: this.currentFps > 0 ? this.currentFps : 32,
         latencyMs,
+        resolution: { width: naturalWidth, height: naturalHeight },
       },
       summary: {
         target: cleanTarget,
@@ -245,7 +399,7 @@ export class YOLOv8Detector {
   }
 
   /**
-   * Run inference on an HTMLImageElement, HTMLVideoElement, or HTMLCanvasElement
+   * Run standard inference on an HTMLImageElement, HTMLVideoElement, or HTMLCanvasElement
    */
   public async detectAll(
     media: HTMLImageElement | HTMLVideoElement | HTMLCanvasElement,
@@ -254,7 +408,6 @@ export class YOLOv8Detector {
   ): Promise<{ detections: Detection[]; metrics: PerformanceMetrics }> {
     const startTime = performance.now();
 
-    // Calculate FPS
     const now = startTime;
     if (this.lastFrameTimestamp > 0) {
       const delta = (now - this.lastFrameTimestamp) / 1000;
@@ -270,10 +423,11 @@ export class YOLOv8Detector {
     this.frameCount++;
 
     let detections: Detection[] = [];
+    const totalArea = Math.max(1, naturalWidth * naturalHeight);
 
     if (this.model && this.isLoaded) {
       try {
-        const predictions = await this.model.detect(media, 20, 0.1);
+        const predictions = await this.model.detect(media, 25, 0.1);
         detections = predictions.map((pred, idx) => {
           const [bx, by, bw, bh] = pred.bbox;
           const x1 = Math.round(Math.max(0, bx));
@@ -281,6 +435,10 @@ export class YOLOv8Detector {
           const x2 = Math.round(Math.min(naturalWidth, bx + bw));
           const y2 = Math.round(Math.min(naturalHeight, by + bh));
           const bbox: [number, number, number, number] = [x1, y1, x2, y2];
+
+          const area = (x2 - x1) * (y2 - y1);
+          const areaPercentage = Number(((area / totalArea) * 100).toFixed(2));
+          const isMinuteObject = areaPercentage <= 3.5;
 
           const thumb = extractObjectThumbnail(media, bbox, 88);
 
@@ -292,6 +450,8 @@ export class YOLOv8Detector {
             bounding_box: bbox,
             color: getClassColor(pred.class),
             thumbnailUrl: thumb,
+            isMinuteObject,
+            areaPercentage,
           };
         });
       } catch (err) {
@@ -315,5 +475,4 @@ export class YOLOv8Detector {
   }
 }
 
-// Global singleton instance
 export const detectorInstance = new YOLOv8Detector();

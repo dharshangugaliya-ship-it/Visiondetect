@@ -36,6 +36,10 @@ export default function App() {
   // Confidence Threshold (Default 0.25 matching reference UI)
   const [confidenceThreshold, setConfidenceThreshold] = useState<number>(0.25);
 
+  // Multi-Scale & Tiled Minute Object Detection Options
+  const [enableMultiScale, setEnableMultiScale] = useState<boolean>(true);
+  const [showTileGrid, setShowTileGrid] = useState<boolean>(false);
+
   // Active Media State
   const [currentMedia, setCurrentMedia] = useState<SampleMedia | null>(SAMPLE_MEDIA[0]);
   const [uploadedImageUrl, setUploadedImageUrl] = useState<string | null>(null);
@@ -144,7 +148,8 @@ export default function App() {
           naturalW || 1920,
           naturalH || 1080,
           cleanTarget,
-          confidenceThreshold
+          confidenceThreshold,
+          enableMultiScale
         );
 
         setRawDetections(result.detections);
@@ -170,7 +175,7 @@ export default function App() {
         setIsProcessing(false);
       }
     },
-    [inputMode, confidenceThreshold]
+    [inputMode, confidenceThreshold, enableMultiScale]
   );
 
   // Process full image scene
@@ -186,7 +191,8 @@ export default function App() {
           img.naturalWidth || 1920,
           img.naturalHeight || 1080,
           query,
-          confidenceThreshold
+          confidenceThreshold,
+          enableMultiScale
         );
 
         const allRes = await detectorInstance.detectAll(
@@ -483,6 +489,10 @@ export default function App() {
             activeTarget={activeTarget}
             showAllObjects={showAllObjects}
             onToggleShowAll={setShowAllObjects}
+            enableMultiScale={enableMultiScale}
+            onToggleMultiScale={setEnableMultiScale}
+            showTileGrid={showTileGrid}
+            onToggleTileGrid={setShowTileGrid}
           />
 
           {/* 3. OPEN-VOCABULARY DETECTION: Find matching regions -> Draw bounding boxes -> Show confidence + count */}
@@ -511,6 +521,8 @@ export default function App() {
                 isVideoPlaying={isVideoPlaying}
                 onTogglePlayVideo={handleTogglePlayVideo}
                 activeTarget={!showAllObjects ? activeTarget : undefined}
+                showTileGrid={showTileGrid}
+                enableMultiScale={enableMultiScale}
               />
             </div>
 

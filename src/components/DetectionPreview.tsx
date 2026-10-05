@@ -31,6 +31,8 @@ interface DetectionPreviewProps {
   isVideoPlaying: boolean;
   onTogglePlayVideo: () => void;
   activeTarget?: string;
+  showTileGrid?: boolean;
+  enableMultiScale?: boolean;
 }
 
 export const DetectionPreview: React.FC<DetectionPreviewProps> = ({
@@ -55,6 +57,8 @@ export const DetectionPreview: React.FC<DetectionPreviewProps> = ({
   isVideoPlaying,
   onTogglePlayVideo,
   activeTarget,
+  showTileGrid = false,
+  enableMultiScale = true,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -73,16 +77,16 @@ export const DetectionPreview: React.FC<DetectionPreviewProps> = ({
       canvas.width = imageRef.current.naturalWidth || 1920;
       canvas.height = imageRef.current.naturalHeight || 1080;
       ctx.drawImage(imageRef.current, 0, 0, canvas.width, canvas.height);
-      drawDetections(ctx, filteredDetections, selectedDetectionId);
+      drawDetections(ctx, filteredDetections, selectedDetectionId, { showTileGrid });
     } else if (inputMode === 'video' || inputMode === 'webcam') {
       // In video/webcam mode, bounding boxes are drawn on top of the video feed
       if (videoRef.current && videoRef.current.videoWidth > 0) {
         canvas.width = videoRef.current.videoWidth;
         canvas.height = videoRef.current.videoHeight;
-        drawDetections(ctx, filteredDetections, selectedDetectionId);
+        drawDetections(ctx, filteredDetections, selectedDetectionId, { showTileGrid });
       }
     }
-  }, [inputMode, filteredDetections, selectedDetectionId, currentMedia, uploadedImageUrl]);
+  }, [inputMode, filteredDetections, selectedDetectionId, currentMedia, uploadedImageUrl, showTileGrid]);
 
   const handleDownload = () => {
     const canvas = canvasRef.current;
@@ -294,6 +298,12 @@ export const DetectionPreview: React.FC<DetectionPreviewProps> = ({
             {activeTarget && (
               <div className="text-[11px] text-slate-300 truncate max-w-[180px]">
                 Target: <span className="text-blue-300 font-semibold">"{activeTarget}"</span>
+              </div>
+            )}
+            {enableMultiScale && (
+              <div className="text-[10px] text-sky-300 flex items-center gap-1 font-medium">
+                <span className="w-1.5 h-1.5 rounded-full bg-sky-400 animate-pulse" />
+                <span>Multi-Scale Tiled SAHI Active</span>
               </div>
             )}
             <div className="text-[10px] font-mono text-slate-400 tabular-nums">

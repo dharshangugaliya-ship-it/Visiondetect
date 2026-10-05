@@ -15,6 +15,8 @@ export interface Detection {
   thumbnailUrl?: string;
   description?: string;
   isTargetMatch?: boolean;
+  isMinuteObject?: boolean;
+  areaPercentage?: number;
 }
 
 export interface SearchResultSummary {

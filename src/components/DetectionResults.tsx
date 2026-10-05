@@ -145,6 +145,11 @@ export const DetectionResults: React.FC<DetectionResultsProps> = ({
                       <span>Target Match</span>
                     </span>
                   )}
+                  {det.isMinuteObject && (
+                    <span className="flex items-center gap-1 text-[10px] font-semibold bg-sky-950/90 text-sky-300 border border-sky-500/50 px-1.5 py-0.5 rounded">
+                      <span>🔬 Minute ({det.areaPercentage !== undefined ? `${det.areaPercentage}%` : '<3%'})</span>
+                    </span>
+                  )}
                 </div>
 
                 <div className="text-xs text-slate-400 flex items-center gap-1.5 font-mono">

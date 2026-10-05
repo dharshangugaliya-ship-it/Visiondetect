@@ -36,7 +36,7 @@ if (apiKey) {
 
 // Open-Vocabulary Object Detection Endpoint
 app.post('/api/detect', async (req: Request, res: Response) => {
-  const { image, target, threshold = 0.25 } = req.body;
+  const { image, target, threshold = 0.25, enableMultiScale = true } = req.body;
 
   if (!image || !target) {
     return res.status(400).json({
@@ -77,13 +77,13 @@ app.post('/api/detect', async (req: Request, res: Response) => {
       },
     };
 
-    const promptText = `Find and localize all instances of "${target}" in this image.
-If there are no instances of "${target}", return an empty array.
+    const promptText = `Find and localize all instances of "${target}" in this image, including any very small, minute, or distant instances that occupy only a tiny fraction of the frame.
+If there are no instances of "${target}", return an empty array [].
 If instances of "${target}" are present, provide:
 1. label: The specific name/description of the detected item (e.g. "${target}").
 2. confidence: Floating point confidence score between 0.0 and 1.0.
-3. box_2d: 2D bounding box array [ymin, xmin, ymax, xmax] normalized on a 0 to 1000 integer scale.
-4. description: A brief 3-6 word note about the location or state of the object.`;
+3. box_2d: 2D bounding box array [ymin, xmin, ymax, xmax] normalized on a 0 to 1000 integer scale. Be extremely precise with small and minute objects.
+4. description: A brief 3-6 word note about the location, size, or state of the object.`;
 
     const response = await ai.models.generateContent({
       model: 'gemini-3.8-flash',
@@ -92,7 +92,7 @@ If instances of "${target}" are present, provide:
       },
       config: {
         systemInstruction:
-          'You are an expert open-vocabulary computer vision object detector. Users can enter any object or concept they want to find, and you locate matching instances within the visual feed. Localize objects with precise 2D bounding boxes [ymin, xmin, ymax, xmax] on a 0-1000 scale. If the specified target does not exist in the image, return [].',
+          'You are an expert open-vocabulary computer vision object detector with high-resolution and multi-scale small/minute object detection capability. Users can enter any object or concept they want to find, and you locate matching instances within the visual feed. Pay special attention to very small, minute, and distant objects that occupy only a tiny portion of the image (even < 1-3% of total frame area). Localize objects with precise 2D bounding boxes [ymin, xmin, ymax, xmax] on a 0-1000 scale. If the specified target does not exist in the image, return [].',
         responseMimeType: 'application/json',
         responseSchema: {
           type: Type.ARRAY,
@@ -134,13 +134,24 @@ If instances of "${target}" are present, provide:
 
     const detections = rawItems
       .filter((item) => item.confidence >= threshold)
-      .map((item, idx) => ({
-        id: `open-voc-${idx}-${Date.now()}`,
-        label: item.label || target,
-        confidence: Number(item.confidence.toFixed(2)),
-        box_2d: item.box_2d, // [ymin, xmin, ymax, xmax] in 0-1000
-        description: item.description || '',
-      }));
+      .map((item, idx) => {
+        const [ymin = 0, xmin = 0, ymax = 0, xmax = 0] = item.box_2d || [];
+        const widthNorm = Math.max(0, xmax - xmin);
+        const heightNorm = Math.max(0, ymax - ymin);
+        // Calculate area percentage on 1000x1000 scale: (widthNorm * heightNorm) / (1000 * 1000) * 100
+        const areaPercentage = Number(((widthNorm * heightNorm) / 10000).toFixed(2));
+        const isMinuteObject = areaPercentage <= 3.5;
+
+        return {
+          id: `open-voc-${idx}-${Date.now()}`,
+          label: item.label || target,
+          confidence: Number(item.confidence.toFixed(2)),
+          box_2d: item.box_2d, // [ymin, xmin, ymax, xmax] in 0-1000
+          description: item.description || '',
+          isMinuteObject,
+          areaPercentage,
+        };
+      });
 
     const latencyMs = Math.max(20, Math.round(performance.now() - startTime));
 

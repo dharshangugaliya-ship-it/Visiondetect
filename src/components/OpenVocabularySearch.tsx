@@ -4,7 +4,7 @@
  */
 
 import React, { useState } from 'react';
-import { Search, Sparkles, CheckCircle2, XCircle, Loader2, ArrowRight } from 'lucide-react';
+import { Search, Sparkles, CheckCircle2, XCircle, Loader2, ArrowRight, Grid3X3, Layers } from 'lucide-react';
 import { SearchResultSummary } from '../detection/types';
 
 interface OpenVocabularySearchProps {
@@ -14,6 +14,10 @@ interface OpenVocabularySearchProps {
   activeTarget: string;
   showAllObjects: boolean;
   onToggleShowAll: (showAll: boolean) => void;
+  enableMultiScale: boolean;
+  onToggleMultiScale: (enabled: boolean) => void;
+  showTileGrid: boolean;
+  onToggleTileGrid: (enabled: boolean) => void;
 }
 
 export const OpenVocabularySearch: React.FC<OpenVocabularySearchProps> = ({
@@ -23,6 +27,10 @@ export const OpenVocabularySearch: React.FC<OpenVocabularySearchProps> = ({
   activeTarget,
   showAllObjects,
   onToggleShowAll,
+  enableMultiScale,
+  onToggleMultiScale,
+  showTileGrid,
+  onToggleTileGrid,
 }) => {
   const [inputValue, setInputValue] = useState<string>(activeTarget || 'car');
 
@@ -39,14 +47,18 @@ export const OpenVocabularySearch: React.FC<OpenVocabularySearchProps> = ({
   };
 
   const suggestions = [
-    'fire extinguisher',
     'car',
     'person',
-    'bicycle',
-    'bus',
-    'laptop',
+    'traffic light',
+    'wristwatch',
+    'smartphone',
     'backpack',
+    'fire extinguisher',
+    'pen',
+    'bicycle',
     'helmet',
+    'cup',
+    'bird',
   ];
 
   return (
@@ -128,8 +140,46 @@ export const OpenVocabularySearch: React.FC<OpenVocabularySearchProps> = ({
         </button>
       </form>
 
+      {/* Multi-Scale / Minute Object Detection Controls */}
+      <div className="flex flex-wrap items-center justify-between gap-3 pt-1 border-t border-slate-800/60">
+        <div className="flex flex-wrap items-center gap-2 text-xs">
+          <button
+            type="button"
+            onClick={() => onToggleMultiScale(!enableMultiScale)}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-semibold transition-all cursor-pointer ${
+              enableMultiScale
+                ? 'bg-sky-500/20 text-sky-300 border-sky-500/40 shadow-sm shadow-sky-500/10'
+                : 'bg-slate-800/60 text-slate-400 border-slate-700 hover:text-slate-200'
+            }`}
+          >
+            <Layers className="w-3.5 h-3.5 text-sky-400" />
+            <span>🔬 Minute Object Boost: {enableMultiScale ? 'Enabled (Multi-Scale Slicing)' : 'Standard'}</span>
+          </button>
+
+          {enableMultiScale && (
+            <button
+              type="button"
+              onClick={() => onToggleTileGrid(!showTileGrid)}
+              className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-xs font-medium transition-all cursor-pointer ${
+                showTileGrid
+                  ? 'bg-blue-600/30 text-blue-200 border-blue-400'
+                  : 'bg-slate-800/40 text-slate-400 border-slate-700/60 hover:text-slate-300'
+              }`}
+            >
+              <Grid3X3 className="w-3.5 h-3.5 text-blue-400" />
+              <span>Tile Grid: {showTileGrid ? 'Visible' : 'Hidden'}</span>
+            </button>
+          )}
+        </div>
+
+        <p className="text-[11px] text-slate-400 flex items-center gap-1">
+          <span className="w-1.5 h-1.5 rounded-full bg-sky-400" />
+          High-res overlapping tiles prevent small &amp; distant objects from being missed.
+        </p>
+      </div>
+
       {/* Quick Suggestions Chips */}
-      <div className="flex flex-wrap items-center gap-1.5 pt-1 text-xs">
+      <div className="flex flex-wrap items-center gap-1.5 pt-0.5 text-xs">
         <span className="text-slate-400 flex items-center gap-1 mr-1">
           <Sparkles className="w-3.5 h-3.5 text-blue-400" />
           <span>Suggestions:</span>
@@ -181,7 +231,7 @@ export const OpenVocabularySearch: React.FC<OpenVocabularySearchProps> = ({
               </div>
               {searchSummary.status === 'not_found' && (
                 <p className="text-[11px] text-slate-400 mt-0.5">
-                  Try another search query or adjust the confidence threshold slider below.
+                  Try another search query, lower the confidence threshold, or enable multi-scale tiled boost.
                 </p>
               )}
             </div>
