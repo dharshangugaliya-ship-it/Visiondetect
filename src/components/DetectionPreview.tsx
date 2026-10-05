@@ -30,6 +30,7 @@ interface DetectionPreviewProps {
   imageRef: React.RefObject<HTMLImageElement | null>;
   isVideoPlaying: boolean;
   onTogglePlayVideo: () => void;
+  activeTarget?: string;
 }
 
 export const DetectionPreview: React.FC<DetectionPreviewProps> = ({
@@ -53,6 +54,7 @@ export const DetectionPreview: React.FC<DetectionPreviewProps> = ({
   imageRef,
   isVideoPlaying,
   onTogglePlayVideo,
+  activeTarget,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -276,19 +278,24 @@ export const DetectionPreview: React.FC<DetectionPreviewProps> = ({
 
         {/* Floating Model & Performance Glass Overlay on Bottom Left */}
         {!isEmpty && (
-          <div className="absolute bottom-3 left-3 bg-black/75 backdrop-blur-md border border-white/10 rounded-xl p-2.5 shadow-2xl text-left pointer-events-none select-none z-10 space-y-1">
+          <div className="absolute bottom-3 left-3 bg-black/80 backdrop-blur-md border border-white/10 rounded-xl p-2.5 shadow-2xl text-left pointer-events-none select-none z-10 space-y-1">
             <div className="flex items-center gap-2">
               <Loader2 className={`w-3.5 h-3.5 text-blue-400 ${isProcessing ? 'animate-spin' : ''}`} />
               <span className="text-xs font-medium text-slate-200">
-                {isProcessing ? 'Scanning...' : 'Inference Active'}
+                {isProcessing ? 'Analyzing Frame...' : 'VisionDetect Active'}
               </span>
             </div>
             <div className="text-[11px] text-slate-400 flex items-center gap-1.5">
-              <span>Active Model:</span>
+              <span>Mode:</span>
               <span className="font-semibold text-white bg-blue-600/30 px-1.5 py-0.5 rounded border border-blue-500/40 text-[10px]">
-                YOLOv8
+                Open-Vocabulary
               </span>
             </div>
+            {activeTarget && (
+              <div className="text-[11px] text-slate-300 truncate max-w-[180px]">
+                Target: <span className="text-blue-300 font-semibold">"{activeTarget}"</span>
+              </div>
+            )}
             <div className="text-[10px] font-mono text-slate-400 tabular-nums">
               FPS: <span className="text-emerald-400 font-semibold">{metrics.fps}</span> · Latency: <span className="text-sky-400 font-semibold">{metrics.latencyMs}ms</span>
             </div>
@@ -313,9 +320,17 @@ export const DetectionPreview: React.FC<DetectionPreviewProps> = ({
         </div>
 
         <div>
-          <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-emerald-950/70 text-emerald-400 border border-emerald-500/30">
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
-            <span>{filteredDetections.length} objects detected</span>
+          <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold border ${
+            filteredDetections.length > 0
+              ? 'bg-emerald-950/70 text-emerald-400 border-emerald-500/30'
+              : 'bg-slate-800/70 text-slate-400 border-slate-700'
+          }`}>
+            <span className={`w-1.5 h-1.5 rounded-full ${filteredDetections.length > 0 ? 'bg-emerald-400' : 'bg-slate-500'}`} />
+            <span>
+              {activeTarget
+                ? `${filteredDetections.length} ${filteredDetections.length === 1 ? 'match' : 'matches'} for "${activeTarget}"`
+                : `${filteredDetections.length} objects detected`}
+            </span>
           </span>
         </div>
       </div>

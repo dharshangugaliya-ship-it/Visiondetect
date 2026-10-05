@@ -4,8 +4,8 @@
  */
 
 import React from 'react';
-import { Target, AlertCircle } from 'lucide-react';
-import { Detection } from '../detection/types';
+import { Target, AlertCircle, CheckCircle2 } from 'lucide-react';
+import { Detection, SearchResultSummary } from '../detection/types';
 
 interface DetectionResultsProps {
   detections: Detection[];
@@ -13,6 +13,7 @@ interface DetectionResultsProps {
   onSelectDetection: (id: string | null) => void;
   confidenceThreshold: number;
   isProcessing: boolean;
+  searchSummary?: SearchResultSummary;
 }
 
 export const DetectionResults: React.FC<DetectionResultsProps> = ({
@@ -21,15 +22,30 @@ export const DetectionResults: React.FC<DetectionResultsProps> = ({
   onSelectDetection,
   confidenceThreshold,
   isProcessing,
+  searchSummary,
 }) => {
   return (
     <div className="bg-[#121826] border border-slate-800/80 rounded-2xl p-5 flex flex-col h-full">
       {/* Header */}
       <div className="flex items-center justify-between pb-3.5 border-b border-slate-800/50">
-        <h3 className="text-base font-semibold text-white">Detection Results</h3>
-        <span className="text-xs font-mono text-slate-400 bg-slate-800/60 px-2 py-0.5 rounded border border-slate-700/50 tabular-nums">
-          {detections.length} Total
-        </span>
+        <div>
+          <h3 className="text-base font-semibold text-white">Detection Results</h3>
+          {searchSummary && searchSummary.target && (
+            <p className="text-[11px] text-slate-400 mt-0.5">
+              Query: <span className="text-blue-300 font-semibold">"{searchSummary.target}"</span>
+            </p>
+          )}
+        </div>
+        <div className="flex items-center gap-2">
+          {searchSummary && searchSummary.status === 'found' && (
+            <span className="text-[11px] font-semibold text-emerald-400 bg-emerald-950/80 border border-emerald-500/40 px-2 py-0.5 rounded-md">
+              ✓ {detections.length} Found
+            </span>
+          )}
+          <span className="text-xs font-mono text-slate-400 bg-slate-800/60 px-2 py-0.5 rounded border border-slate-700/50 tabular-nums">
+            {detections.length} Total
+          </span>
+        </div>
       </div>
 
       {/* Detections List Area */}
@@ -53,19 +69,38 @@ export const DetectionResults: React.FC<DetectionResultsProps> = ({
           </div>
         )}
 
-        {/* State: Empty (No detections above threshold) */}
-        {!isProcessing && detections.length === 0 && (
+        {/* State: Target Query Not Found */}
+        {!isProcessing && searchSummary?.status === 'not_found' && detections.length === 0 && (
+          <div className="h-64 flex flex-col items-center justify-center text-center p-6 space-y-3 border border-dashed border-amber-900/40 bg-amber-950/10 rounded-xl">
+            <div className="w-11 h-11 rounded-xl bg-amber-950/60 border border-amber-500/30 flex items-center justify-center text-amber-400">
+              <AlertCircle className="w-6 h-6" />
+            </div>
+            <div>
+              <p className="text-sm font-semibold text-amber-200">
+                Target: "{searchSummary.target}"
+              </p>
+              <p className="text-xs font-medium text-amber-400/90 mt-1">
+                No matching objects detected.
+              </p>
+              <p className="text-[11px] text-slate-400 mt-2 max-w-xs leading-relaxed">
+                The open-vocabulary engine scanned the visual feed for this concept but found no instances above {confidenceThreshold.toFixed(2)} confidence.
+              </p>
+            </div>
+          </div>
+        )}
+
+        {/* State: General Empty (No detections above threshold) */}
+        {!isProcessing && searchSummary?.status !== 'not_found' && detections.length === 0 && (
           <div className="h-64 flex flex-col items-center justify-center text-center p-6 space-y-3 border border-dashed border-slate-800/80 rounded-xl">
             <div className="w-10 h-10 rounded-xl bg-slate-800/60 flex items-center justify-center text-slate-500">
-              <AlertCircle className="w-5 h-5 text-amber-500/70" />
+              <AlertCircle className="w-5 h-5 text-slate-400" />
             </div>
             <div>
               <p className="text-sm font-medium text-slate-300">
                 No objects above threshold
               </p>
               <p className="text-xs text-slate-500 mt-1 max-w-xs">
-                No detections scored &ge; {confidenceThreshold.toFixed(2)}. Lower the
-                confidence slider to view weaker detections.
+                No detections scored &ge; {confidenceThreshold.toFixed(2)}. Enter a target in the search bar above or lower the threshold.
               </p>
             </div>
           </div>
@@ -104,18 +139,30 @@ export const DetectionResults: React.FC<DetectionResultsProps> = ({
                   <span className="text-sm font-bold text-white capitalize truncate">
                     {det.class_name}
                   </span>
+                  {det.isTargetMatch && (
+                    <span className="flex items-center gap-1 text-[10px] font-semibold bg-emerald-950/80 text-emerald-400 border border-emerald-500/40 px-1.5 py-0.5 rounded">
+                      <CheckCircle2 className="w-2.5 h-2.5" />
+                      <span>Target Match</span>
+                    </span>
+                  )}
                 </div>
 
                 <div className="text-xs text-slate-400 flex items-center gap-1.5 font-mono">
                   <span>Confidence:</span>
                   <span className="text-slate-200 font-semibold tabular-nums">
-                    {det.confidence.toFixed(2)}
+                    {det.confidence.toFixed(2)} ({Math.round(det.confidence * 100)}%)
                   </span>
                 </div>
 
                 <div className="text-[11px] text-slate-500 font-mono tabular-nums">
                   Box: [{x1}, {y1}, {x2}, {y2}]
                 </div>
+
+                {det.description && (
+                  <p className="text-[11px] text-slate-400 truncate max-w-[200px]">
+                    {det.description}
+                  </p>
+                )}
               </div>
 
               {/* Right Thumbnail Crop */}

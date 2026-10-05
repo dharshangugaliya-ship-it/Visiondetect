@@ -13,6 +13,15 @@ export interface Detection {
   bounding_box: [number, number, number, number]; // [x1, y1, x2, y2]
   color: string;
   thumbnailUrl?: string;
+  description?: string;
+  isTargetMatch?: boolean;
+}
+
+export interface SearchResultSummary {
+  target: string;
+  matchesFound: number;
+  confidence?: number;
+  status: 'idle' | 'searching' | 'found' | 'not_found';
 }
 
 export interface PerformanceMetrics {

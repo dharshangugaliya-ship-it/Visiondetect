@@ -38,9 +38,8 @@ export const Hero: React.FC = () => {
             Object Detection
           </h1>
           <p className="text-slate-400 text-sm sm:text-base leading-relaxed max-w-xl">
-            Detect and identify objects in images, videos, or live camera feeds using
-            YOLO and OpenCV. Get class labels, bounding boxes, and confidence scores
-            in real-time.
+            Users can enter any object they want to find, and the VisionDetect system
+            uses open-vocabulary detection to locate matching objects within images or video.
           </p>
         </div>
 

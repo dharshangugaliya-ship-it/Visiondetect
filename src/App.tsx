@@ -6,20 +6,32 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { Sidebar } from './components/Sidebar';
 import { Hero } from './components/Hero';
+import { OpenVocabularySearch } from './components/OpenVocabularySearch';
 import { InputSourceControls } from './components/InputSourceControls';
 import { DetectionPreview } from './components/DetectionPreview';
 import { DetectionResults } from './components/DetectionResults';
 import { FeatureHighlights } from './components/FeatureHighlights';
-import { Detection, InputMode, MediaMeta, PerformanceMetrics } from './detection/types';
+import { Detection, InputMode, MediaMeta, PerformanceMetrics, SearchResultSummary } from './detection/types';
 import { filterByConfidence } from './detection/confidenceFilter';
 import { SAMPLE_MEDIA, SampleMedia } from './detection/sampleData';
 import { detectorInstance } from './detection/detector';
-import { extractObjectThumbnail, getClassColor } from './detection/visualization';
+import { extractObjectThumbnail } from './detection/visualization';
 
 export default function App() {
   // Navigation & Mode
   const [currentTab, setCurrentTab] = useState<'home' | InputMode>('home');
   const [inputMode, setInputMode] = useState<InputMode>('image');
+
+  // Open-Vocabulary Search State
+  const [activeTarget, setActiveTarget] = useState<string>('car');
+  const [showAllObjects, setShowAllObjects] = useState<boolean>(false);
+  const [isSearching, setIsSearching] = useState<boolean>(false);
+  const [searchSummary, setSearchSummary] = useState<SearchResultSummary>({
+    target: 'car',
+    matchesFound: 1,
+    confidence: 0.88,
+    status: 'found',
+  });
 
   // Confidence Threshold (Default 0.25 matching reference UI)
   const [confidenceThreshold, setConfidenceThreshold] = useState<number>(0.25);
@@ -36,6 +48,9 @@ export default function App() {
 
   // Detection & Inference State
   const [rawDetections, setRawDetections] = useState<Detection[]>(
+    SAMPLE_MEDIA[0].defaultDetections || []
+  );
+  const [allSceneDetections, setAllSceneDetections] = useState<Detection[]>(
     SAMPLE_MEDIA[0].defaultDetections || []
   );
   const [selectedDetectionId, setSelectedDetectionId] = useState<string | null>(null);
@@ -58,17 +73,23 @@ export default function App() {
   const webcamStreamRef = useRef<MediaStream | null>(null);
   const animationFrameRef = useRef<number | null>(null);
 
+  // Active detections based on mode (Target Only vs Detect All)
+  const activeDetectionsList = useMemo(() => {
+    if (showAllObjects) {
+      return allSceneDetections;
+    }
+    return rawDetections;
+  }, [showAllObjects, allSceneDetections, rawDetections]);
+
   // Modular Confidence Filter: Output = Valid Detections where confidence >= threshold
   const filteredDetections = useMemo(() => {
-    return filterByConfidence(rawDetections, confidenceThreshold);
-  }, [rawDetections, confidenceThreshold]);
+    return filterByConfidence(activeDetectionsList, confidenceThreshold);
+  }, [activeDetectionsList, confidenceThreshold]);
 
   // Handle switching tabs from Sidebar
   const handleSelectTab = (tab: 'home' | InputMode) => {
     setCurrentTab(tab);
-    if (tab === 'home') {
-      // keep current mode
-    } else {
+    if (tab !== 'home') {
       handleSelectMode(tab);
     }
   };
@@ -85,64 +106,139 @@ export default function App() {
     } else {
       stopWebcam();
     }
-
-    if (mode === 'video') {
-      if (!uploadedVideoUrl && currentMedia) {
-        // Prepare video sample if available
-      }
-    }
   };
 
-  // Run detection on HTMLImageElement
-  const processImageDetections = useCallback(async (img: HTMLImageElement) => {
-    setIsProcessing(true);
-    const start = performance.now();
+  // Open-Vocabulary Search Handler
+  const handleOpenVocabSearch = useCallback(
+    async (targetQuery: string) => {
+      const cleanTarget = targetQuery.trim();
+      if (!cleanTarget) return;
 
-    try {
-      const res = await detectorInstance.detect(
-        img,
-        img.naturalWidth || 1920,
-        img.naturalHeight || 1080
-      );
+      setActiveTarget(cleanTarget);
+      setIsSearching(true);
+      setIsProcessing(true);
 
-      if (res.detections.length > 0) {
-        setRawDetections(res.detections);
-        setMetrics(res.metrics);
-      } else if (currentMedia?.defaultDetections && !uploadedImageUrl) {
-        // Fallback to high-accuracy predefined annotations for sample presets
-        // with dynamic thumbnail generation
-        const generatedDets = currentMedia.defaultDetections.map((det) => ({
-          ...det,
-          thumbnailUrl: extractObjectThumbnail(img, det.bounding_box, 88),
-        }));
-        setRawDetections(generatedDets);
+      const mediaElement =
+        inputMode === 'image'
+          ? imageRef.current
+          : videoRef.current;
+
+      if (!mediaElement) {
+        setIsSearching(false);
+        setIsProcessing(false);
+        return;
+      }
+
+      const naturalW =
+        'naturalWidth' in mediaElement
+          ? mediaElement.naturalWidth
+          : mediaElement.videoWidth || 1280;
+      const naturalH =
+        'naturalHeight' in mediaElement
+          ? mediaElement.naturalHeight
+          : mediaElement.videoHeight || 720;
+
+      try {
+        const result = await detectorInstance.detectOpenVocabulary(
+          mediaElement,
+          naturalW || 1920,
+          naturalH || 1080,
+          cleanTarget,
+          confidenceThreshold
+        );
+
+        setRawDetections(result.detections);
+        setSearchSummary(result.summary);
+        setMetrics(result.metrics);
+
+        // Keep allSceneDetections updated as well
+        if (result.detections.length > 0) {
+          setAllSceneDetections((prev) => {
+            const combined = [...result.detections, ...prev.filter((d) => !result.detections.some((rd) => rd.id === d.id))];
+            return combined;
+          });
+        }
+      } catch (err) {
+        console.warn('Error during open-vocabulary search:', err);
+        setSearchSummary({
+          target: cleanTarget,
+          matchesFound: 0,
+          status: 'not_found',
+        });
+      } finally {
+        setIsSearching(false);
+        setIsProcessing(false);
+      }
+    },
+    [inputMode, confidenceThreshold]
+  );
+
+  // Process full image scene
+  const processImageDetections = useCallback(
+    async (img: HTMLImageElement, target?: string) => {
+      setIsProcessing(true);
+      const start = performance.now();
+
+      try {
+        const query = target || activeTarget;
+        const openVocabRes = await detectorInstance.detectOpenVocabulary(
+          img,
+          img.naturalWidth || 1920,
+          img.naturalHeight || 1080,
+          query,
+          confidenceThreshold
+        );
+
+        const allRes = await detectorInstance.detectAll(
+          img,
+          img.naturalWidth || 1920,
+          img.naturalHeight || 1080
+        );
+
+        setRawDetections(openVocabRes.detections);
+        setSearchSummary(openVocabRes.summary);
+        setAllSceneDetections(allRes.detections.length > 0 ? allRes.detections : openVocabRes.detections);
         setMetrics({
           fps: 32,
-          latencyMs: Math.max(18, Math.round(performance.now() - start)),
+          latencyMs: openVocabRes.metrics.latencyMs || Math.round(performance.now() - start),
           resolution: {
             width: img.naturalWidth || 1920,
             height: img.naturalHeight || 1080,
           },
         });
+      } catch (err) {
+        console.warn('Detection processing note:', err);
+      } finally {
+        setIsProcessing(false);
       }
-    } catch (err) {
-      console.warn('Detection processing error:', err);
-    } finally {
-      setIsProcessing(false);
-    }
-  }, [currentMedia, uploadedImageUrl]);
+    },
+    [activeTarget, confidenceThreshold]
+  );
 
-  // Initial load: generate thumbnails for initial Street Scene
+  // Initial load: generate thumbnails and default target state
   useEffect(() => {
     const img = new Image();
     img.crossOrigin = 'anonymous';
     img.src = SAMPLE_MEDIA[0].url;
     img.onload = () => {
-      const dets = (SAMPLE_MEDIA[0].defaultDetections || []).map((det) => ({
+      const allDets = (SAMPLE_MEDIA[0].defaultDetections || []).map((det) => ({
         ...det,
         thumbnailUrl: extractObjectThumbnail(img, det.bounding_box, 88),
       }));
-      setRawDetections(dets);
+      setAllSceneDetections(allDets);
+
+      // Default target "car"
+      const carMatches = allDets
+        .filter((d) => d.class_name.toLowerCase() === 'car')
+        .map((d) => ({ ...d, isTargetMatch: true }));
+
+      setRawDetections(carMatches);
+      setSearchSummary({
+        target: 'car',
+        matchesFound: carMatches.length,
+        confidence: carMatches[0]?.confidence || 0.88,
+        status: 'found',
+      });
     };
   }, []);
 
@@ -162,7 +258,7 @@ export default function App() {
         dimensions: `${img.naturalWidth} × ${img.naturalHeight}`,
         size: `${(file.size / (1024 * 1024)).toFixed(1)} MB`,
       });
-      processImageDetections(img);
+      processImageDetections(img, activeTarget);
     };
   };
 
@@ -202,20 +298,7 @@ export default function App() {
     img.crossOrigin = 'anonymous';
     img.src = sample.url;
     img.onload = () => {
-      if (sample.defaultDetections) {
-        const dets = sample.defaultDetections.map((det) => ({
-          ...det,
-          thumbnailUrl: extractObjectThumbnail(img, det.bounding_box, 88),
-        }));
-        setRawDetections(dets);
-        setMetrics({
-          fps: 32,
-          latencyMs: 24,
-          resolution: { width: 1920, height: 1080 },
-        });
-      } else {
-        processImageDetections(img);
-      }
+      processImageDetections(img, activeTarget);
     };
   };
 
@@ -233,9 +316,9 @@ export default function App() {
       webcamStreamRef.current = stream;
       setWebcamActive(true);
       setMediaMeta({
-        name: 'Live Webcam Stream',
+        name: 'Live Camera Feed',
         dimensions: '1280 × 720',
-        size: 'Live Feed',
+        size: 'Live Webcam',
       });
 
       if (videoRef.current) {
@@ -246,7 +329,7 @@ export default function App() {
       console.warn('Webcam access error:', err);
       setWebcamError(
         err?.name === 'NotAllowedError'
-          ? 'Camera permission denied. Click retry after granting permission in your browser.'
+          ? 'Camera permission denied. Grant permission in your browser to test live detection.'
           : 'Unable to access camera. Please check your video input device.'
       );
       setWebcamActive(false);
@@ -287,20 +370,37 @@ export default function App() {
       const video = videoRef.current;
       if (video && video.readyState >= 2 && !video.paused && !video.ended) {
         const now = performance.now();
-        // Run inference at ~15-20 FPS for optimal responsiveness and smooth playback
-        if (now - lastInferenceTime >= 65) {
+        // Inference interval throttled for smooth video streaming
+        if (now - lastInferenceTime >= 90) {
           lastInferenceTime = now;
           try {
-            const res = await detectorInstance.detect(
+            const res = await detectorInstance.detectAll(
               video,
               video.videoWidth || 1280,
               video.videoHeight || 720
             );
             if (isSubscribed) {
-              if (res.detections.length > 0) {
+              setAllSceneDetections(res.detections);
+              setMetrics(res.metrics);
+
+              // Filter for active target if in Target Only mode
+              if (!showAllObjects && activeTarget) {
+                const targetLower = activeTarget.toLowerCase();
+                const matched = res.detections.filter((d) => {
+                  const cls = d.class_name.toLowerCase();
+                  return cls.includes(targetLower) || targetLower.includes(cls);
+                }).map((d) => ({ ...d, isTargetMatch: true }));
+
+                setRawDetections(matched);
+                setSearchSummary({
+                  target: activeTarget,
+                  matchesFound: matched.length,
+                  confidence: matched[0]?.confidence,
+                  status: matched.length > 0 ? 'found' : 'not_found',
+                });
+              } else {
                 setRawDetections(res.detections);
               }
-              setMetrics(res.metrics);
             }
           } catch (e) {
             // ignore frame skip
@@ -319,7 +419,7 @@ export default function App() {
         cancelAnimationFrame(animationFrameRef.current);
       }
     };
-  }, [inputMode, webcamActive, isVideoPlaying]);
+  }, [inputMode, webcamActive, isVideoPlaying, showAllObjects, activeTarget]);
 
   // Clean / Reset state
   const handleClear = () => {
@@ -328,7 +428,13 @@ export default function App() {
     setUploadedVideoUrl(null);
     setCurrentMedia(null);
     setRawDetections([]);
+    setAllSceneDetections([]);
     setSelectedDetectionId(null);
+    setSearchSummary({
+      target: activeTarget,
+      matchesFound: 0,
+      status: 'idle',
+    });
     setMediaMeta({
       name: 'No Media Selected',
       dimensions: '0 × 0',
@@ -359,7 +465,7 @@ export default function App() {
           {/* Hero Section */}
           <Hero />
 
-          {/* Input Source Selection + Confidence Threshold */}
+          {/* 1. UPLOAD IMAGE / VIDEO / SELECT INPUT */}
           <InputSourceControls
             inputMode={inputMode}
             onSelectMode={handleSelectMode}
@@ -369,7 +475,17 @@ export default function App() {
             onVideoUpload={handleVideoUpload}
           />
 
-          {/* Detection Preview + Results Grid */}
+          {/* 2. Open-Vocabulary Target Input: What do you want to detect? */}
+          <OpenVocabularySearch
+            onSearch={handleOpenVocabSearch}
+            isSearching={isSearching}
+            searchSummary={searchSummary}
+            activeTarget={activeTarget}
+            showAllObjects={showAllObjects}
+            onToggleShowAll={setShowAllObjects}
+          />
+
+          {/* 3. OPEN-VOCABULARY DETECTION: Find matching regions -> Draw bounding boxes -> Show confidence + count */}
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
             {/* Left 65%: Detection Preview */}
             <div className="lg:col-span-8">
@@ -394,6 +510,7 @@ export default function App() {
                 imageRef={imageRef}
                 isVideoPlaying={isVideoPlaying}
                 onTogglePlayVideo={handleTogglePlayVideo}
+                activeTarget={!showAllObjects ? activeTarget : undefined}
               />
             </div>
 
@@ -405,6 +522,7 @@ export default function App() {
                 onSelectDetection={setSelectedDetectionId}
                 confidenceThreshold={confidenceThreshold}
                 isProcessing={isProcessing}
+                searchSummary={!showAllObjects ? searchSummary : undefined}
               />
             </div>
           </div>
