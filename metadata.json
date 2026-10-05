@@ -1,0 +1,6 @@
+{
+  "name": "VisionDetect - Computer Vision Object Detection",
+  "description": "Real-time YOLOv8 object detection system for images, video, and live webcam feeds with confidence filtering, bounding box visualization, and performance metrics.",
+  "requestFramePermissions": ["camera"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
